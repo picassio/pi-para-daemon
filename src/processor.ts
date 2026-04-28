@@ -265,7 +265,12 @@ export async function processSession(
   const wikiTools = createWikiTools(wikiDir, store);
   const allTools = [...sessionTools, ...wikiTools];
 
-  // 4. Spin up Agent
+  // 4. Spin up Agent with context pruning for long-running exploration.
+  // After many tool calls, the accumulated context can exceed MiniMax's
+  // 196K window. Prune old session_slice/session_search results — the
+  // Agent already extracted what it needed from them.
+  const MAX_CONTEXT_CHARS = 150_000; // leave headroom below 196K
+
   const agent = new Agent({
     initialState: {
       systemPrompt: CAPTURE_SYSTEM_PROMPT,
@@ -274,6 +279,39 @@ export async function processSession(
       messages: [],
     },
     getApiKey,
+    transformContext: async (messages) => {
+      // Estimate total chars
+      let total = CAPTURE_SYSTEM_PROMPT.length;
+      for (const m of messages) {
+        if ("content" in m) {
+          const c = m.content;
+          if (typeof c === "string") total += c.length;
+          else if (Array.isArray(c)) {
+            for (const b of c) {
+              if (typeof b === "object" && b !== null && "text" in b && typeof (b as { text: string }).text === "string") {
+                total += (b as { text: string }).text.length;
+              }
+            }
+          }
+        }
+      }
+
+      if (total <= MAX_CONTEXT_CHARS) return messages;
+
+      // Prune old tool results — truncate text blocks to 200 chars
+      return messages.map((m, i): AgentMessage => {
+        if (i >= messages.length - 10) return m;
+        if (m.role !== "toolResult") return m;
+        if (!("content" in m) || !Array.isArray(m.content)) return m;
+        const newContent = (m.content as Array<{ type: string; text: string }>).map(b => {
+          if (b.type === "text" && b.text.length > 200) {
+            return { type: "text" as const, text: b.text.slice(0, 200) + "\n[pruned]" };
+          }
+          return b;
+        });
+        return { ...m, content: newContent } as AgentMessage;
+      });
+    },
   });
 
   // 5. Prompt the agent
