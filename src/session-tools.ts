@@ -222,16 +222,28 @@ export function createSessionTools(session: LoadedSession): AgentTool[] {
     execute: async () => {
       const s = session.stats;
 
-      // Extract user message topics (first 100 chars of each)
-      const userTopics = session.messages
-        .filter((m) => m.role === "user")
+      // Extract user message topics (first 100 chars of each, cap at 50)
+      const allUserMsgs = session.messages.filter((m) => m.role === "user");
+      const displayLimit = 50;
+      const userTopics = allUserMsgs
+        .slice(0, displayLimit)
         .map((m) => m.text.replace(/^\[User\]: /, "").slice(0, 100))
         .map((t, i) => `  ${i + 1}. ${t}`);
+      if (allUserMsgs.length > displayLimit) {
+        userTopics.push(`  ... and ${allUserMsgs.length - displayLimit} more user messages. Use session_search to find specific topics.`);
+      }
+
+      const sizeLabel = s.totalChars > 1_000_000 ? `${(s.totalChars / 1_000_000).toFixed(1)}M`
+        : s.totalChars > 1_000 ? `${(s.totalChars / 1_000).toFixed(0)}K`
+        : `${s.totalChars}`;
 
       const text = [
-        `Session: ${s.totalChars} chars, ${s.totalMessages} messages`,
+        `Session: ${sizeLabel} chars, ${s.totalMessages} messages`,
         `  User: ${s.userMessages}, Assistant: ${s.assistantMessages}, Tool results: ${s.toolResults}`,
         `  Tool calls: ${s.toolCalls}, Compaction summaries: ${s.compactionSummaries}`,
+        "",
+        "Strategy: Use session_search to find topics, then session_slice to read details.",
+        `Valid slice range: 0 to ${s.totalChars}`,
         "",
         "User messages (topics):",
         ...userTopics,
