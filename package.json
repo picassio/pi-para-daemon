@@ -1,0 +1,41 @@
+{
+  "name": "@picassio/pi-para-daemon",
+  "version": "0.1.0",
+  "description": "Background knowledge capture daemon for pi-para — processes session files into wiki pages",
+  "type": "module",
+  "main": "./dist/daemon.js",
+  "bin": {
+    "pi-para-daemon": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit",
+    "dev": "npx tsx src/cli.ts",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@picassio/pi-para": "file:../pi-para",
+    "@picassio/qmd": "file:../qmd",
+    "better-sqlite3": "^11.9.1",
+    "typebox": "^1.1.24",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-agent-core": "^0.70.2",
+    "@mariozechner/pi-ai": "^0.70.2",
+    "@types/better-sqlite3": "*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-agent-core": "^0.70.2",
+    "@mariozechner/pi-ai": "^0.70.2"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "license": "MIT"
+}
