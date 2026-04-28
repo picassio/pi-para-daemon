@@ -266,10 +266,12 @@ export async function processSession(
   const allTools = [...sessionTools, ...wikiTools];
 
   // 4. Spin up Agent with context pruning for long-running exploration.
-  // After many tool calls, the accumulated context can exceed MiniMax's
-  // 196K window. Prune old session_slice/session_search results — the
+  // After many tool calls, the accumulated context can exceed the LLM's
+  // context window. Prune old session_slice/session_search results — the
   // Agent already extracted what it needed from them.
-  const MAX_CONTEXT_CHARS = 150_000; // leave headroom below 196K
+  // Use 75% of the model's context window (chars ≈ tokens * 4), leave headroom.
+  const contextWindowChars = (model.contextWindow ?? 128_000) * 4;
+  const MAX_CONTEXT_CHARS = Math.floor(contextWindowChars * 0.75);
 
   const agent = new Agent({
     initialState: {

@@ -23,41 +23,70 @@ import { RegistryWatcher } from "./watcher.js";
 // -- Model setup -------------------------------------------------------------
 // Use MiniMax via the same config as @picassio/qmd
 
-async function createModel() {
+async function createModel(modelArg?: string) {
   const { parse } = await import("yaml");
   const { readFileSync } = await import("node:fs");
-  const { completeSimple } = await import("@mariozechner/pi-ai");
+  const { getModel, getProviders, getEnvApiKey } = await import("@mariozechner/pi-ai");
 
+  // 1. Try CLI --model arg: "provider/model-id" (e.g. "anthropic/claude-sonnet-4")
+  if (modelArg) {
+    const [provider, ...rest] = modelArg.split("/");
+    const modelId = rest.join("/");
+    if (provider && modelId) {
+      const model = getModel(provider as any, modelId as any);
+      if (model) {
+        const getApiKey = async (p: string) => getEnvApiKey(p) ?? "";
+        console.log(`[daemon] Using pi model: ${provider}/${modelId} (context: ${model.contextWindow})`);
+        return { model, getApiKey };
+      }
+    }
+  }
+
+  // 2. Try pi's model registry — find any provider with an API key
+  const providers = getProviders();
+  for (const provider of providers) {
+    const key = getEnvApiKey(provider);
+    if (key) {
+      // Pick a cheap/fast model from this provider
+      const { getModels } = await import("@mariozechner/pi-ai");
+      const models = getModels(provider as any);
+      // Prefer non-reasoning models with large context
+      const sorted = [...models].sort((a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0));
+      const picked = sorted.find(m => !m.reasoning) ?? sorted[0];
+      if (picked) {
+        const getApiKey = async (p: string) => getEnvApiKey(p) ?? "";
+        console.log(`[daemon] Using pi model: ${provider}/${picked.id} (context: ${picked.contextWindow})`);
+        return { model: picked, getApiKey };
+      }
+    }
+  }
+
+  // 3. Fall back to qmd config (MiniMax, OpenRouter, etc.)
   const configPath = join(homedir(), ".config", "qmd", "index.yml");
-  if (!existsSync(configPath)) {
-    console.error("Error: No ~/.config/qmd/index.yml found. Configure providers first.");
-    process.exit(1);
+  if (existsSync(configPath)) {
+    const cfg = parse(readFileSync(configPath, "utf-8"));
+    const chat = cfg?.providers?.chat;
+    if (chat?.url && chat?.key) {
+      const model = {
+        id: chat.model || "MiniMax-M2.7-highspeed",
+        name: chat.model || "MiniMax-M2.7-highspeed",
+        provider: "custom",
+        api: chat.api === "anthropic" ? "anthropic-messages" as const : "openai-completions" as const,
+        baseUrl: chat.url,
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 196000,
+        maxTokens: 8192,
+      };
+      const getApiKey = async (_provider: string) => chat.key as string;
+      console.log(`[daemon] Using qmd provider: ${chat.model} at ${chat.url}`);
+      return { model, getApiKey };
+    }
   }
 
-  const cfg = parse(readFileSync(configPath, "utf-8"));
-  const chat = cfg?.providers?.chat;
-  if (!chat?.url || !chat?.key) {
-    console.error("Error: No chat provider in ~/.config/qmd/index.yml");
-    process.exit(1);
-  }
-
-  // Create a Model object compatible with pi-ai
-  const model = {
-    id: chat.model || "MiniMax-M2.7-highspeed",
-    name: chat.model || "MiniMax-M2.7-highspeed",
-    provider: "minimax",
-    api: chat.api === "anthropic" ? "anthropic-messages" as const : "openai-completions" as const,
-    baseUrl: chat.url,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 196000,
-    maxTokens: 8192,
-  };
-
-  const getApiKey = async (_provider: string) => chat.key as string;
-
-  return { model, getApiKey };
+  console.error("Error: No LLM available. Set API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.) or configure ~/.config/qmd/index.yml");
+  process.exit(1);
 }
 
 // -- CLI ---------------------------------------------------------------------
@@ -69,7 +98,9 @@ async function main() {
 
   switch (command) {
     case "start": {
-      const { model, getApiKey } = await createModel();
+      const modelIdx = args.indexOf("--model");
+      const modelArg = modelIdx >= 0 ? args[modelIdx + 1] : undefined;
+      const { model, getApiKey } = await createModel(modelArg);
       const daemon = new Daemon({ wikiDir, model: model as any, getApiKey });
 
       process.on("SIGINT", async () => {
@@ -138,7 +169,9 @@ async function main() {
         console.error("Usage: pi-para-daemon process <session_file>");
         process.exit(1);
       }
-      const { model, getApiKey } = await createModel();
+      const modelIdx2 = args.indexOf("--model");
+      const modelArg2 = modelIdx2 >= 0 ? args[modelIdx2 + 1] : undefined;
+      const { model, getApiKey } = await createModel(modelArg2);
       const daemon = new Daemon({ wikiDir, model: model as any, getApiKey });
       await daemon.start();
       await daemon.processOne(sessionFile);
@@ -220,7 +253,15 @@ Commands:
   process <file>     Process a single session file
   process-recent     Process unprocessed sessions (--hours N, default 24)
   retry-failed       Retry all failed sessions
-  history            Show processing history (--scope NAME to filter)`);
+  history            Show processing history (--scope NAME to filter)
+
+Options:
+  --model <provider/id>  Use specific model (e.g. anthropic/claude-sonnet-4)
+
+Model resolution order:
+  1. --model flag
+  2. Pi's model registry (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+  3. ~/.config/qmd/index.yml chat provider (MiniMax, OpenRouter, etc.)`);
       break;
   }
 }
